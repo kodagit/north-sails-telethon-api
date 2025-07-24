@@ -45,27 +45,27 @@ class TelegramSessionManager:
         
     async def get_client(self):
         """Get Telegram client with persistent session"""
-    try:
-        if self.session_string:
-            # Use existing session string
-            session = StringSession(self.session_string)
-            logger.info("✅ Using existing Telegram session")
-            client = TelegramClient(session, API_ID, API_HASH)
+        try:
+            if self.session_string:
+                # Use existing session string
+                session = StringSession(self.session_string)
+                logger.info("✅ Using existing Telegram session")
+                client = TelegramClient(session, API_ID, API_HASH)
             
-            # Connect and verify session
-            await client.connect()
+                # Connect and verify session
+                await client.connect()
             
-            if not await client.is_user_authorized():
-                logger.error("❌ Session string invalid or expired")
-                await client.disconnect()
-                return None
+                if not await client.is_user_authorized():
+                    logger.error("❌ Session string invalid or expired")
+                    await client.disconnect()
+                    return None
             
-            logger.info("✅ Telegram session verified successfully")
-            return client
+                logger.info("✅ Telegram session verified successfully")
+                return client
             
         else:
-            logger.error("❌ No TELEGRAM_SESSION_STRING found in environment")
-            return None
+                logger.error("❌ No TELEGRAM_SESSION_STRING found in environment")
+                return None
             
     except Exception as e:
         logger.error(f"❌ Telegram session error: {str(e)}")
