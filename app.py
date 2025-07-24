@@ -44,31 +44,32 @@ class TelegramSessionManager:
         self.session_string = TELEGRAM_SESSION_STRING
         
     async def get_client(self):
-        """Get Telegram client with persistent session"""
-        try:
-            if self.session_string:
-                # Use existing session string
-                session = StringSession(self.session_string)
-                logger.info("✅ Using existing Telegram session")
-            else:
-                # Create new session (for first time setup)
-                session = StringSession()
-                logger.info("🔄 Creating new Telegram session - SAVE THE STRING!")
-                
+    """Get Telegram client with persistent session"""
+    try:
+        if self.session_string:
+            # Use existing session string
+            session = StringSession(self.session_string)
+            logger.info("✅ Using existing Telegram session")
             client = TelegramClient(session, API_ID, API_HASH)
-            await client.start()
             
-            # Log session string for first time setup
-            if not self.session_string:
-                new_session_string = client.session.save()
-                logger.critical(f"🔑 IMPORTANT: Save this to TELEGRAM_SESSION_STRING env var:")
-                logger.critical(f"TELEGRAM_SESSION_STRING={new_session_string}")
-                
+            # Connect and verify session
+            await client.connect()
+            
+            if not await client.is_user_authorized():
+                logger.error("❌ Session string invalid or expired")
+                await client.disconnect()
+                return None
+            
+            logger.info("✅ Telegram session verified successfully")
             return client
             
-        except Exception as e:
-            logger.error(f"❌ Telegram session error: {str(e)}")
-            raise
+        else:
+            logger.error("❌ No TELEGRAM_SESSION_STRING found in environment")
+            return None
+            
+    except Exception as e:
+        logger.error(f"❌ Telegram session error: {str(e)}")
+        return None
 
 class VKRateLimiter:
     """Advanced VK API Rate Limiter with exponential backoff"""
