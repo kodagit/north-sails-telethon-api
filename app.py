@@ -282,22 +282,7 @@ class NotionClient:
             url = f"{self.base_url}/databases/{TELEGRAM_DATABASE_ID}/query"
             
             payload = {
-                "filter": {
-                    "or": [
-                        {
-                            "property": "Status",
-                            "status": {
-                                "equals": "Active"
-                            }
-                        },
-                        {
-                            "property": "Status",
-                            "status": {
-                                "is_empty": True
-                            }
-                        }
-                    ]
-                }
+                "page_size": 100
             }
             
             response = requests.post(url, headers=self.headers, json=payload)
