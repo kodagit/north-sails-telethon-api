@@ -325,7 +325,7 @@ class NotionClient:
             url = f"{self.base_url}/databases/{VK_DATABASE_ID}/query"
             
             payload = {
-                ""page_size": 100
+                "page_size": 100
             }
             
             response = requests.post(url, headers=self.headers, json=payload)
