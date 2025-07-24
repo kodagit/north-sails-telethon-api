@@ -660,71 +660,93 @@ class SocialMediaScanner:
         }
 
     async def scan_telegram_channels(self, hours_back=24, min_score=6.0):
-        """Scan Telegram channels with session management"""
-        channels_config = self.notion.get_telegram_channels()
+    """Scan Telegram channels with session management"""
+    channels_config = self.notion.get_telegram_channels()
+    
+    if not channels_config:
+        return [], {}
+    
+    collected_posts = []
+    channel_stats = {}
+    all_raw_posts = []
+    
+    try:
+        client = await self.session_manager.get_client()
         
-        if not channels_config:
+        # ✅ Client kontrol ekleyin:
+        if client is None:
+            logger.error("❌ Failed to get Telegram client")
             return [], {}
         
-        collected_posts = []
-        channel_stats = {}
-        all_raw_posts = []
-        
         try:
-            client = await self.session_manager.get_client()
+            logger.info(f"🔍 Scanning {len(channels_config)} Telegram channels...")
             
-            try:
-                logger.info(f"🔍 Scanning {len(channels_config)} Telegram channels...")
+            for channel_config in channels_config:
+                channel = channel_config['channel']
                 
-                for channel_config in channels_config:
-                    channel = channel_config['channel']
+                if not channel.startswith('@'):
+                    channel = f"@{channel}"
+                
+                try:
+                    logger.info(f"📱 Scanning: {channel}")
                     
-                    if not channel.startswith('@'):
-                        channel = f"@{channel}"
+                    entity = await client.get_entity(channel)
+                    since_date = datetime.now() - timedelta(hours=hours_back)
+                    messages = await client.get_messages(channel, limit=100, offset_date=since_date)
                     
-                    try:
-                        logger.info(f"📱 Scanning: {channel}")
+                    channel_posts = []
+                    
+                    for msg in messages:
+                        if not msg.message or len(msg.message) < 50:
+                            continue
                         
-                        entity = await client.get_entity(channel)
-                        since_date = datetime.now() - timedelta(hours=hours_back)
-                        messages = await client.get_messages(channel, limit=100, offset_date=since_date)
+                        views = getattr(msg, 'views', 0) or 0
+                        forwards = getattr(msg, 'forwards', 0) or 0
+                        total_engagement = views + (forwards * 10)
                         
-                        channel_posts = []
-                        
-                        for msg in messages:
-                            if not msg.message or len(msg.message) < 50:
-                                continue
-                            
-                            views = getattr(msg, 'views', 0) or 0
-                            forwards = getattr(msg, 'forwards', 0) or 0
-                            total_engagement = views + (forwards * 10)
-                            
-                            post_data = {
-                                'channel': channel,
-                                'channel_config': channel_config,
-                                'entity': entity,
-                                'message': msg,
-                                'content': msg.message,
-                                'engagement': {
-                                    'views': views,
-                                    'forwards': forwards,
-                                    'total': total_engagement
-                                }
+                        post_data = {
+                            'channel': channel,
+                            'channel_config': channel_config,
+                            'entity': entity,
+                            'message': msg,
+                            'content': msg.message,
+                            'engagement': {
+                                'views': views,
+                                'forwards': forwards,
+                                'total': total_engagement
                             }
-                            
-                            all_raw_posts.append(post_data)
-                            channel_posts.append(post_data)
-                        
-                        channel_stats[channel_config['id']] = {
-                            'total_posts': len(channel_posts),
-                            'avg_score': 0
                         }
                         
-                        await asyncio.sleep(2)
-                        
-                    except Exception as e:
-                        logger.error(f"  ❌ Error scanning {channel}: {str(e)}")
-                        continue
+                        all_raw_posts.append(post_data)
+                        channel_posts.append(post_data)
+                    
+                    channel_stats[channel_config['id']] = {
+                        'total_posts': len(channel_posts),
+                        'avg_score': 0
+                    }
+                    
+                    await asyncio.sleep(2)
+                    
+                except Exception as e:
+                    logger.error(f"  ❌ Error scanning {channel}: {str(e)}")
+                    continue
+            
+            # ✅ Trending analysis devam eder...
+            logger.info("🧠 Analyzing Telegram content for keywords...")
+            trending_data = self.extract_keywords_from_content(all_raw_posts)
+            
+            # ✅ Scanning devam eder (kalan kod aynı)...
+            
+        finally:
+            # ✅ Safe disconnect:
+            if client:
+                await client.disconnect()
+    
+    except Exception as e:
+        logger.error(f"❌ Fatal error in Telegram scan: {str(e)}")
+        raise
+    
+    return collected_posts, trending_data
                 
                 logger.info("🧠 Analyzing Telegram content for keywords...")
                 trending_data = self.extract_keywords_from_content(all_raw_posts)
