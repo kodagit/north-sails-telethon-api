@@ -44,7 +44,7 @@ class TelegramSessionManager:
         self.session_string = TELEGRAM_SESSION_STRING
         
     async def get_client(self):
-    """Get Telegram client with persistent session"""
+        """Get Telegram client with persistent session"""
     try:
         if self.session_string:
             # Use existing session string
