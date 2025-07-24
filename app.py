@@ -67,9 +67,9 @@ class TelegramSessionManager:
                 logger.error("❌ No TELEGRAM_SESSION_STRING found in environment")
                 return None
             
-       except Exception as e:
-           logger.error(f"❌ Telegram session error: {str(e)}")
-           return None
+        except Exception as e:
+            logger.error(f"❌ Telegram session error: {str(e)}")
+            return None
 
 class VKRateLimiter:
     """Advanced VK API Rate Limiter with exponential backoff"""
