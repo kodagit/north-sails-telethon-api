@@ -1,5 +1,5 @@
-# app.py - Complete North Sails Social Media Intelligence API v3.0
-# Production-Ready with Session Management, Rate Limiting & Backup System
+# app.py - Fixed North Sails Social Media Intelligence API v3.0
+# ✅ Telegram Session Issue FIXED
 
 import asyncio
 import json
@@ -38,38 +38,71 @@ VK_ACCESS_TOKEN = os.getenv('VK_ACCESS_TOKEN', '')
 BACKUP_TELEGRAM_CHAT_ID = os.getenv('BACKUP_TELEGRAM_CHAT_ID', '')
 
 class TelegramSessionManager:
-    """Telegram Session Management for Render ephemeral filesystem"""
+    """✅ FIXED - Telegram Session Management"""
     
     def __init__(self):
         self.session_string = TELEGRAM_SESSION_STRING
+        self.client = None
         
     async def get_client(self):
-        """Get Telegram client with persistent session"""
+        """✅ FIXED - Get Telegram client with proper error handling"""
         try:
-            if self.session_string:
-                # Use existing session string
-                session = StringSession(self.session_string)
-                logger.info("✅ Using existing Telegram session")
-                client = TelegramClient(session, API_ID, API_HASH)
-            
-                # Connect and verify session
-                await client.connect()
-            
-                if not await client.is_user_authorized():
-                    logger.error("❌ Session string invalid or expired")
-                    await client.disconnect()
-                    return None
-            
-                logger.info("✅ Telegram session verified successfully")
-                return client
-            
-            else:
+            # Session string validation
+            if not self.session_string:
                 logger.error("❌ No TELEGRAM_SESSION_STRING found in environment")
                 return None
             
+            if len(self.session_string) < 50:
+                logger.error("❌ Session string too short - invalid format")
+                return None
+            
+            logger.info(f"🔑 Session string length: {len(self.session_string)}")
+            logger.info(f"🔑 Session preview: {self.session_string[:20]}...{self.session_string[-10:]}")
+            
+            # Create session with StringSession
+            session = StringSession(self.session_string)
+            
+            # Create client with proper parameters
+            self.client = TelegramClient(
+                session,
+                API_ID,
+                API_HASH,
+                device_model="North Sails API",
+                system_version="1.0.0",
+                app_version="1.0.0",
+                lang_code="en",
+                system_lang_code="en"
+            )
+            
+            logger.info("🔗 Connecting to Telegram...")
+            await self.client.connect()
+            
+            # Check authorization
+            if not await self.client.is_user_authorized():
+                logger.error("❌ Session string invalid or expired")
+                await self.client.disconnect()
+                return None
+            
+            logger.info("✅ Telegram client connected and authorized successfully")
+            return self.client
+            
         except Exception as e:
-            logger.error(f"❌ Telegram session error: {str(e)}")
+            logger.error(f"❌ Telegram client creation error: {str(e)}")
+            if self.client:
+                try:
+                    await self.client.disconnect()
+                except:
+                    pass
             return None
+    
+    async def disconnect(self):
+        """Safe disconnect"""
+        if self.client:
+            try:
+                await self.client.disconnect()
+                logger.info("🔌 Telegram client disconnected")
+            except Exception as e:
+                logger.warning(f"⚠️ Disconnect warning: {str(e)}")
 
 class VKRateLimiter:
     """Advanced VK API Rate Limiter with exponential backoff"""
@@ -130,6 +163,729 @@ def vk_rate_limit(max_retries=3):
                     return result
                     
                 except Exception as e:
+                    logger.error(f"  ❌ Error scanning {channel}: {str(e)}")
+                    continue
+            
+            # Analyze content for trending keywords
+            logger.info("🧠 Analyzing Telegram content for keywords...")
+            trending_data = self.extract_keywords_from_content(all_raw_posts)
+            
+            scan_date = datetime.now().strftime('%Y-%m-%d %H:%M')
+            self.notion.save_keywords_to_notion(trending_data, scan_date, 'telegram')
+            
+            # Process posts with trending analysis
+            for post_data in all_raw_posts:
+                content = post_data['content']
+                channel_config = post_data['channel_config']
+                
+                relevance = self.calculate_brand_relevance(content, trending_data, 'telegram')
+                engagement = post_data['engagement']
+                
+                engagement_score = min(10, (engagement['total'] // 100) + (len(relevance['matched_words']) * 0.5))
+                
+                priority_bonus = {
+                    'Critical': 3, 'High': 2, 'Medium': 1, 'Low': 0
+                }.get(channel_config['priority'], 1)
+                
+                category_bonus = {
+                    'Sailing': 3, 'Fashion': 2, 'Lifestyle': 2,
+                    'Competitor': 1, 'Influencer': 1, 'News': 0.5, 'Brand': 1
+                }.get(channel_config['category'], 1)
+                
+                north_sails_score = min(10, (
+                    relevance['total_relevance'] + 
+                    engagement_score + 
+                    priority_bonus + 
+                    category_bonus
+                ) / 4)
+                
+                if north_sails_score < min_score or engagement['total'] < 100:
+                    continue
+                
+                if any('яхт' in word or 'sail' in word for word in relevance['matched_words']):
+                    category = 'sailing'
+                elif any('мод' in word or 'fashion' in word for word in relevance['matched_words']):
+                    category = 'fashion'
+                elif any('премиум' in word or 'luxury' in word for word in relevance['matched_words']):
+                    category = 'luxury'
+                else:
+                    category = 'lifestyle'
+                
+                final_post = {
+                    'platform': 'telegram',
+                    'channel': post_data['channel'],
+                    'channel_title': post_data['entity'].title,
+                    'channel_category': channel_config['category'],
+                    'message_id': post_data['message'].id,
+                    'content': content,
+                    'date': post_data['message'].date.isoformat(),
+                    'engagement': engagement,
+                    'media_type': 'photo' if post_data['message'].photo else 'video' if post_data['message'].video else 'text',
+                    'trending_analysis': {
+                        'matched_words': relevance['matched_words'],
+                        'matched_phrases': relevance['matched_phrases'],
+                        'word_score': relevance['trending_word_score'],
+                        'phrase_score': relevance['trending_phrase_score']
+                    },
+                    'ai_analysis': {
+                        'brand_relevance': round(relevance['total_relevance'], 1),
+                        'trend_score': round(engagement_score, 1),
+                        'viral_potential': min(10, engagement['total'] // 200),
+                        'target_audience_fit': round((relevance['trending_word_score'] + relevance['trending_phrase_score']) / 2, 1),
+                        'content_category': category,
+                        'hashtags': [f'#{category}', '#northsails', '#telegram'],
+                        'insights': f"High {category} potential - discovered via trending analysis",
+                        'keyword_analysis': {
+                            'total_trending_matches': len(relevance['matched_words']) + len(relevance['matched_phrases']),
+                            'brand_mentions': relevance['brand_score'] > 0,
+                            'top_matched_words': relevance['matched_words'][:5],
+                            'top_matched_phrases': relevance['matched_phrases'][:3],
+                            'discovery_method': 'telegram_trending_analysis'
+                        }
+                    },
+                    'north_sails_score': round(north_sails_score, 1),
+                    'processed_at': datetime.now().isoformat(),
+                    'url': f"https://t.me/{post_data['channel'].replace('@', '')}/{post_data['message'].id}",
+                    'scanner_version': 'telegram_notion_v3.0'
+                }
+                
+                collected_posts.append(final_post)
+            
+            # Update channel stats
+            for channel_id, stats in channel_stats.items():
+                channel_posts = [p for p in collected_posts if p.get('channel_config', {}).get('id') == channel_id]
+                if channel_posts:
+                    avg_score = sum(p['north_sails_score'] for p in channel_posts) / len(channel_posts)
+                    stats['avg_score'] = round(avg_score, 1)
+                
+                self.notion.update_telegram_stats(channel_id, stats)
+        
+        except Exception as e:
+            logger.error(f"❌ Fatal error in Telegram scan: {str(e)}")
+            return [], {}
+        
+        finally:
+            # Always disconnect client safely
+            if client:
+                await self.session_manager.disconnect()
+        
+        logger.info(f"✅ Telegram scan completed: {len(collected_posts)} posts collected")
+        return collected_posts, trending_data
+
+    def scan_vk_communities_batch(self, min_score=6.0, batch_size=5):
+        """Scan VK communities with batch processing and rate limiting"""
+        communities_config = self.notion.get_vk_communities()
+        
+        if not communities_config:
+            return [], {}
+        
+        collected_posts = []
+        community_stats = {}
+        all_raw_posts = []
+        
+        try:
+            logger.info(f"🔍 Scanning {len(communities_config)} VK communities in batches of {batch_size}...")
+            
+            # Process communities in batches
+            for i in range(0, len(communities_config), batch_size):
+                batch = communities_config[i:i + batch_size]
+                
+                logger.info(f"🔄 Processing batch {i//batch_size + 1}/{(len(communities_config)-1)//batch_size + 1}")
+                
+                for community_config in batch:
+                    community_id = community_config['community_id']
+                    
+                    try:
+                        logger.info(f"📱 Scanning VK: {community_id}")
+                        
+                        community_info = self.vk.get_community_info(community_id)
+                        if not community_info:
+                            continue
+                        
+                        posts = self.vk.get_community_posts(community_id, 50)
+                        
+                        community_posts = []
+                        
+                        for post in posts:
+                            if not post.get('text') or len(post['text']) < 50:
+                                continue
+                            
+                            likes = post.get('likes', {}).get('count', 0)
+                            comments = post.get('comments', {}).get('count', 0)
+                            reposts = post.get('reposts', {}).get('count', 0)
+                            views = post.get('views', {}).get('count', 0)
+                            
+                            total_engagement = likes + (comments * 3) + (reposts * 5) + (views * 0.1)
+                            
+                            post_data = {
+                                'community_id': community_id,
+                                'community_config': community_config,
+                                'community_info': community_info,
+                                'post': post,
+                                'content': post['text'],
+                                'engagement': {
+                                    'likes': likes,
+                                    'comments': comments,
+                                    'reposts': reposts,
+                                    'views': views,
+                                    'total': total_engagement
+                                }
+                            }
+                            
+                            all_raw_posts.append(post_data)
+                            community_posts.append(post_data)
+                        
+                        community_stats[community_config['id']] = {
+                            'total_posts': len(community_posts),
+                            'avg_engagement': 0,
+                            'members_count': community_info.get('members_count', 0)
+                        }
+                        
+                    except Exception as e:
+                        logger.error(f"  ❌ Error scanning VK {community_id}: {str(e)}")
+                        continue
+                
+                # Wait between batches
+                if i + batch_size < len(communities_config):
+                    logger.info("😴 Batch completed, waiting 30s...")
+                    time.sleep(30)
+            
+            logger.info("🧠 Analyzing VK content for keywords...")
+            trending_data = self.extract_keywords_from_content(all_raw_posts)
+            
+            scan_date = datetime.now().strftime('%Y-%m-%d %H:%M')
+            self.notion.save_keywords_to_notion(trending_data, scan_date, 'vk')
+            
+            for post_data in all_raw_posts:
+                content = post_data['content']
+                community_config = post_data['community_config']
+                
+                relevance = self.calculate_brand_relevance(content, trending_data, 'vk')
+                engagement = post_data['engagement']
+                
+                engagement_score = min(10, (engagement['total'] // 50) + (len(relevance['matched_words']) * 0.5))
+                
+                priority_bonus = {
+                    'Critical': 3, 'High': 2, 'Medium': 1, 'Low': 0
+                }.get(community_config['priority'], 1)
+                
+                category_bonus = {
+                    'Sailing': 3, 'Fashion': 2, 'Lifestyle': 2,
+                    'Competitor': 1, 'Influencer': 1, 'Brand': 1, 'Community': 0.5
+                }.get(community_config['category'], 1)
+                
+                north_sails_score = min(10, (
+                    relevance['total_relevance'] + 
+                    engagement_score + 
+                    priority_bonus + 
+                    category_bonus
+                ) / 4)
+                
+                if north_sails_score < min_score or engagement['total'] < 50:
+                    continue
+                
+                if any('яхт' in word or 'sail' in word for word in relevance['matched_words']):
+                    category = 'sailing'
+                elif any('мод' in word or 'fashion' in word for word in relevance['matched_words']):
+                    category = 'fashion'
+                elif any('премиум' in word or 'luxury' in word for word in relevance['matched_words']):
+                    category = 'luxury'
+                else:
+                    category = 'lifestyle'
+                
+                final_post = {
+                    'platform': 'vk',
+                    'community_id': post_data['community_id'],
+                    'community_name': post_data['community_info'].get('name', ''),
+                    'community_category': community_config['category'],
+                    'post_id': post_data['post']['id'],
+                    'content': content,
+                    'date': datetime.fromtimestamp(post_data['post']['date']).isoformat(),
+                    'engagement': engagement,
+                    'media_type': 'photo' if post_data['post'].get('attachments') else 'text',
+                    'trending_analysis': {
+                        'matched_words': relevance['matched_words'],
+                        'matched_phrases': relevance['matched_phrases'],
+                        'word_score': relevance['trending_word_score'],
+                        'phrase_score': relevance['trending_phrase_score']
+                    },
+                    'ai_analysis': {
+                        'brand_relevance': round(relevance['total_relevance'], 1),
+                        'trend_score': round(engagement_score, 1),
+                        'viral_potential': min(10, engagement['total'] // 100),
+                        'target_audience_fit': round((relevance['trending_word_score'] + relevance['trending_phrase_score']) / 2, 1),
+                        'content_category': category,
+                        'hashtags': [f'#{category}', '#northsails', '#vk'],
+                        'insights': f"High {category} potential - VK community analysis",
+                        'keyword_analysis': {
+                            'total_trending_matches': len(relevance['matched_words']) + len(relevance['matched_phrases']),
+                            'brand_mentions': relevance['brand_score'] > 0,
+                            'top_matched_words': relevance['matched_words'][:5],
+                            'top_matched_phrases': relevance['matched_phrases'][:3],
+                            'discovery_method': 'vk_trending_analysis'
+                        }
+                    },
+                    'north_sails_score': round(north_sails_score, 1),
+                    'processed_at': datetime.now().isoformat(),
+                    'url': f"https://vk.com/wall-{post_data['community_id']}_{post_data['post']['id']}",
+                    'scanner_version': 'vk_notion_v3.0'
+                }
+                
+                collected_posts.append(final_post)
+            
+            for community_id, stats in community_stats.items():
+                community_posts = [p for p in collected_posts if p.get('community_config', {}).get('id') == community_id]
+                if community_posts:
+                    avg_engagement = sum(p['engagement']['total'] for p in community_posts) / len(community_posts)
+                    stats['avg_engagement'] = round(avg_engagement, 1)
+                
+                self.notion.update_vk_stats(community_id, stats)
+        
+        except Exception as e:
+            logger.error(f"❌ Fatal error in VK scan: {str(e)}")
+            raise
+        
+        return collected_posts, trending_data
+
+# Initialize scanner
+scanner = SocialMediaScanner()
+
+@app.route('/')
+def home():
+    """Health check endpoint"""
+    return jsonify({
+        "status": "active",
+        "service": "North Sails Social Media Intelligence API",
+        "version": "3.0 - Production Ready with Session Management + Rate Limiting + Backup",
+        "features": [
+            "Telegram channel monitoring with session persistence",
+            "VK community monitoring with rate limiting", 
+            "Automatic keyword discovery",
+            "Notion database integration",
+            "Multi-layer backup system",
+            "100+ frequency trending analysis",
+            "Error recovery mechanisms"
+        ],
+        "integrations": {
+            "notion_configured": bool(NOTION_TOKEN),
+            "telegram_configured": bool(API_ID and API_HASH),
+            "telegram_session": bool(TELEGRAM_SESSION_STRING),
+            "vk_configured": bool(VK_ACCESS_TOKEN),
+            "backup_configured": bool(BACKUP_TELEGRAM_CHAT_ID)
+        },
+        "timestamp": datetime.now().isoformat()
+    })
+
+@app.route('/debug/session', methods=['GET'])
+def debug_session():
+    """✅ NEW - Debug session string for troubleshooting"""
+    session_string = os.getenv('TELEGRAM_SESSION_STRING')
+    return jsonify({
+        "session_exists": bool(session_string),
+        "session_length": len(session_string) if session_string else 0,
+        "session_starts": session_string[:20] if session_string else None,
+        "session_ends": session_string[-10:] if session_string else None,
+        "ends_with_equals": session_string.endswith('=') if session_string else False,
+        "api_id_configured": bool(os.getenv('TELEGRAM_API_ID')),
+        "api_hash_configured": bool(os.getenv('TELEGRAM_API_HASH')),
+        "environment_check": "OK" if session_string and len(session_string) > 50 else "FAILED"
+    })
+
+@app.route('/scan/telegram', methods=['POST', 'GET'])
+def scan_telegram():
+    """✅ FIXED - Telegram channels scanning endpoint"""
+    try:
+        hours_back = request.json.get('hours_back', 24) if request.is_json else 24
+        min_score = request.json.get('min_score', 6.0) if request.is_json else 6.0
+        
+        logger.info(f"🚀 Starting Telegram scan: {hours_back}h back, min_score: {min_score}")
+        
+        # ✅ FIXED - Proper async handling in Flask
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            posts, trending_data = loop.run_until_complete(
+                scanner.scan_telegram_channels(hours_back, min_score)
+            )
+        finally:
+            loop.close()
+        
+        result = {
+            'source': 'telegram_scanner_api_v3',
+            'timestamp': datetime.now().isoformat(),
+            'parameters': {
+                'hours_back': hours_back,
+                'min_score': min_score
+            },
+            'total_posts': len(posts),
+            'posts': posts,
+            'trending_keywords': {
+                'words': trending_data.get('words', [])[:10],
+                'phrases': trending_data.get('phrases', [])[:10]
+            },
+            'summary': {
+                'total_collected': len(posts),
+                'avg_north_sails_score': sum(p['north_sails_score'] for p in posts) / len(posts) if posts else 0,
+                'top_category': max(set(p['ai_analysis']['content_category'] for p in posts), 
+                                  key=lambda x: sum(1 for p in posts if p['ai_analysis']['content_category'] == x)) if posts else 'none',
+                'high_score_posts': len([p for p in posts if p['north_sails_score'] >= 8]),
+                'categories': {}
+            }
+        }
+        
+        if posts:
+            categories = {}
+            for post in posts:
+                cat = post['ai_analysis']['content_category']
+                categories[cat] = categories.get(cat, 0) + 1
+            result['summary']['categories'] = categories
+        
+        logger.info(f"✅ Telegram scan completed: {len(posts)} posts collected")
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"❌ Error in Telegram scan: {str(e)}")
+        return jsonify({
+            'error': str(e),
+            'source': 'telegram_scanner_api_v3',
+            'timestamp': datetime.now().isoformat(),
+            'posts': []
+        }), 500
+
+@app.route('/scan/vk', methods=['POST', 'GET'])
+def scan_vk():
+    """VK communities scanning endpoint"""
+    try:
+        min_score = request.json.get('min_score', 6.0) if request.is_json else 6.0
+        batch_size = request.json.get('batch_size', 5) if request.is_json else 5
+        
+        logger.info(f"🚀 Starting VK scan: min_score: {min_score}, batch_size: {batch_size}")
+        
+        posts, trending_data = scanner.scan_vk_communities_batch(min_score, batch_size)
+        
+        result = {
+            'source': 'vk_scanner_api_v3',
+            'timestamp': datetime.now().isoformat(),
+            'parameters': {
+                'min_score': min_score,
+                'batch_size': batch_size
+            },
+            'total_posts': len(posts),
+            'posts': posts,
+            'trending_keywords': {
+                'words': trending_data.get('words', [])[:10],
+                'phrases': trending_data.get('phrases', [])[:10]
+            },
+            'summary': {
+                'total_collected': len(posts),
+                'avg_north_sails_score': sum(p['north_sails_score'] for p in posts) / len(posts) if posts else 0,
+                'top_category': max(set(p['ai_analysis']['content_category'] for p in posts), 
+                                  key=lambda x: sum(1 for p in posts if p['ai_analysis']['content_category'] == x)) if posts else 'none',
+                'high_score_posts': len([p for p in posts if p['north_sails_score'] >= 8]),
+                'categories': {}
+            }
+        }
+        
+        if posts:
+            categories = {}
+            for post in posts:
+                cat = post['ai_analysis']['content_category']
+                categories[cat] = categories.get(cat, 0) + 1
+            result['summary']['categories'] = categories
+        
+        logger.info(f"✅ VK scan completed: {len(posts)} posts collected")
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"❌ Error in VK scan: {str(e)}")
+        return jsonify({
+            'error': str(e),
+            'source': 'vk_scanner_api_v3',
+            'timestamp': datetime.now().isoformat(),
+            'posts': []
+        }), 500
+
+@app.route('/scan/all', methods=['POST', 'GET'])
+def scan_all_platforms():
+    """Scan all platforms endpoint"""
+    try:
+        hours_back = request.json.get('hours_back', 24) if request.is_json else 24
+        min_score = request.json.get('min_score', 6.0) if request.is_json else 6.0
+        batch_size = request.json.get('batch_size', 5) if request.is_json else 5
+        
+        logger.info(f"🚀 Starting full scan: Telegram + VK")
+        
+        # Telegram scan
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            telegram_posts, telegram_trending = loop.run_until_complete(
+                scanner.scan_telegram_channels(hours_back, min_score)
+            )
+        finally:
+            loop.close()
+        
+        # VK scan
+        vk_posts, vk_trending = scanner.scan_vk_communities_batch(min_score, batch_size)
+        
+        all_posts = telegram_posts + vk_posts
+        
+        result = {
+            'source': 'full_scanner_api_v3',
+            'timestamp': datetime.now().isoformat(),
+            'parameters': {
+                'hours_back': hours_back,
+                'min_score': min_score,
+                'batch_size': batch_size
+            },
+            'platforms': {
+                'telegram': {
+                    'posts_count': len(telegram_posts),
+                    'trending_keywords': {
+                        'words': telegram_trending.get('words', [])[:5],
+                        'phrases': telegram_trending.get('phrases', [])[:5]
+                    }
+                },
+                'vk': {
+                    'posts_count': len(vk_posts),
+                    'trending_keywords': {
+                        'words': vk_trending.get('words', [])[:5],
+                        'phrases': vk_trending.get('phrases', [])[:5]
+                    }
+                }
+            },
+            'total_posts': len(all_posts),
+            'posts': all_posts,
+            'summary': {
+                'total_collected': len(all_posts),
+                'avg_north_sails_score': sum(p['north_sails_score'] for p in all_posts) / len(all_posts) if all_posts else 0,
+                'top_category': max(set(p['ai_analysis']['content_category'] for p in all_posts), 
+                                  key=lambda x: sum(1 for p in all_posts if p['ai_analysis']['content_category'] == x)) if all_posts else 'none',
+                'high_score_posts': len([p for p in all_posts if p['north_sails_score'] >= 8]),
+                'platform_breakdown': {
+                    'telegram': len(telegram_posts),
+                    'vk': len(vk_posts)
+                }
+            }
+        }
+        
+        logger.info(f"✅ Full scan completed: {len(all_posts)} total posts collected")
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"❌ Error in full scan: {str(e)}")
+        return jsonify({
+            'error': str(e),
+            'source': 'full_scanner_api_v3',
+            'timestamp': datetime.now().isoformat(),
+            'posts': []
+        }), 500
+
+@app.route('/webhook/n8n', methods=['POST'])
+def n8n_webhook():
+    """N8N webhook integration endpoint"""
+    try:
+        data = request.json
+        scan_type = data.get('scan_type', 'all')
+        
+        if scan_type == 'telegram':
+            return redirect(url_for('scan_telegram'), code=307)
+        elif scan_type == 'vk':
+            return redirect(url_for('scan_vk'), code=307)
+        else:
+            return redirect(url_for('scan_all_platforms'), code=307)
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/channels/telegram')
+def list_telegram_channels():
+    """List Telegram channels from Notion"""
+    try:
+        channels = scanner.notion.get_telegram_channels()
+        return jsonify({
+            'platform': 'telegram',
+            'total_channels': len(channels),
+            'channels': channels,
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/channels/vk')
+def list_vk_communities():
+    """List VK communities from Notion"""
+    try:
+        communities = scanner.notion.get_vk_communities()
+        return jsonify({
+            'platform': 'vk',
+            'total_communities': len(communities),
+            'communities': communities,
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/backup/export')
+def export_backup():
+    """Export last 24 hours data as JSON backup"""
+    try:
+        backup_data = {
+            'timestamp': datetime.now().isoformat(),
+            'telegram_channels': scanner.notion.get_telegram_channels(),
+            'vk_communities': scanner.notion.get_vk_communities(),
+            'backup_files': len(glob.glob('/tmp/northsails_backup_*.json')),
+            'version': '3.0'
+        }
+        
+        return jsonify(backup_data)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/recovery/list_backups')
+def list_backups():
+    """List available backup files"""
+    try:
+        backup_files = glob.glob('/tmp/northsails_backup_*.json')
+        
+        backups = []
+        for file_path in backup_files:
+            try:
+                with open(file_path, 'r') as f:
+                    backup_data = json.load(f)
+                    backups.append({
+                        'backup_id': backup_data['backup_id'],
+                        'timestamp': backup_data['timestamp'],
+                        'total_posts': backup_data['total_posts'],
+                        'scan_type': backup_data['scan_type'],
+                        'file_path': file_path
+                    })
+            except:
+                continue
+        
+        return jsonify({
+            'available_backups': backups,
+            'total_backup_files': len(backups),
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/recovery/restore/<backup_id>')
+def restore_backup(backup_id):
+    """Restore data from backup"""
+    try:
+        file_path = f'/tmp/northsails_backup_{backup_id}.json'
+        
+        with open(file_path, 'r') as f:
+            backup_data = json.load(f)
+        
+        return jsonify({
+            'backup_id': backup_id,
+            'total_posts_in_backup': len(backup_data['posts']),
+            'backup_timestamp': backup_data['timestamp'],
+            'scan_type': backup_data['scan_type'],
+            'status': 'backup_retrieved',
+            'message': 'Backup data retrieved. Manual processing may be needed for Notion restoration.'
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/health')
+def health():
+    """Detailed health check"""
+    session_status = "configured" if TELEGRAM_SESSION_STRING else "missing"
+    
+    return jsonify({
+        "status": "healthy",
+        "uptime": "active",
+        "version": "3.0 - FIXED",
+        "integrations": {
+            "notion": {
+                "configured": bool(NOTION_TOKEN),
+                "telegram_db": bool(TELEGRAM_DATABASE_ID),
+                "vk_db": bool(VK_DATABASE_ID),
+                "keywords_db": bool(KEYWORDS_DATABASE_ID)
+            },
+            "telegram": {
+                "configured": bool(API_ID and API_HASH),
+                "session_status": session_status,
+                "session_length": len(TELEGRAM_SESSION_STRING) if TELEGRAM_SESSION_STRING else 0
+            },
+            "vk": {
+                "configured": bool(VK_ACCESS_TOKEN),
+                "rate_limiting": "enabled"
+            },
+            "backup": {
+                "configured": bool(BACKUP_TELEGRAM_CHAT_ID),
+                "local_backup": "enabled",
+                "available_backups": len(glob.glob('/tmp/northsails_backup_*.json'))
+            }
+        },
+        "features": {
+            "session_management": True,
+            "rate_limiting": True,
+            "backup_system": True,
+            "keyword_discovery": True,
+            "trending_analysis": True,
+            "multi_platform": True,
+            "notion_integration": True,
+            "error_recovery": True,
+            "telegram_session_fix": "✅ APPLIED"
+        },
+        "timestamp": datetime.now().isoformat()
+    })
+
+@app.route('/session/generate')
+def generate_session():
+    """Helper endpoint to generate Telegram session string"""
+    if TELEGRAM_SESSION_STRING:
+        return jsonify({
+            'status': 'already_configured',
+            'message': 'Session string already exists',
+            'session_configured': True,
+            'session_length': len(TELEGRAM_SESSION_STRING)
+        })
+    
+    return jsonify({
+        'status': 'needs_configuration',
+        'message': 'Run the app locally first to generate session string',
+        'instructions': [
+            '1. Set TELEGRAM_API_ID and TELEGRAM_API_HASH',
+            '2. Leave TELEGRAM_SESSION_STRING empty',
+            '3. Run /scan/telegram endpoint',
+            '4. Check logs for session string',
+            '5. Add session string to Render environment'
+        ]
+    })
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    
+    logger.info("🚀 North Sails Social Media Intelligence API v3.0 Starting...")
+    logger.info(f"🔧 Notion: {'✅' if NOTION_TOKEN else '❌'}")
+    logger.info(f"📱 Telegram: {'✅' if API_ID and API_HASH else '❌'}")
+    logger.info(f"🔑 Session: {'✅' if TELEGRAM_SESSION_STRING else '❌ (Generate needed)'}")
+    logger.info(f"📘 VK: {'✅' if VK_ACCESS_TOKEN else '❌'}")
+    logger.info(f"💾 Backup: {'✅' if BACKUP_TELEGRAM_CHAT_ID else '⚠️ (Optional)'}")
+    
+    # ✅ Session validation on startup
+    if TELEGRAM_SESSION_STRING:
+        logger.info(f"🔍 Session string detected: {len(TELEGRAM_SESSION_STRING)} chars")
+        logger.info(f"🔍 Session preview: {TELEGRAM_SESSION_STRING[:20]}...{TELEGRAM_SESSION_STRING[-10:]}")
+        
+        if len(TELEGRAM_SESSION_STRING) < 50:
+            logger.error("❌ Session string too short - may be invalid!")
+        else:
+            logger.info("✅ Session string format looks valid")
+    else:
+        logger.warning("⚠️ No Telegram session string configured")
+    
+    app.run(host='0.0.0.0', port=port, debug=False)
                     error_str = str(e).lower()
                     
                     if "rate limit" in error_str or "429" in error_str or "too many requests" in error_str:
@@ -421,7 +1177,7 @@ class NotionClient:
             response = requests.patch(url, headers=self.headers, json=payload)
             return response.status_code == 200
                 
-        except Exception as e:
+        except Exception e:
             logger.error(f"❌ Error updating VK stats: {str(e)}")
             return False
 
@@ -660,25 +1416,26 @@ class SocialMediaScanner:
         }
 
     async def scan_telegram_channels(self, hours_back=24, min_score=6.0):
-    """Scan Telegram channels with session management"""
-    channels_config = self.notion.get_telegram_channels()
-    
-    if not channels_config:
-        return [], {}
-    
-    collected_posts = []
-    channel_stats = {}
-    all_raw_posts = []
-    
-    try:
-        client = await self.session_manager.get_client()
+        """✅ FIXED - Scan Telegram channels with proper session management"""
+        channels_config = self.notion.get_telegram_channels()
         
-        # ✅ Client kontrol ekleyin:
-        if client is None:
-            logger.error("❌ Failed to get Telegram client")
+        if not channels_config:
+            logger.warning("❌ No Telegram channels found in Notion")
             return [], {}
         
+        collected_posts = []
+        channel_stats = {}
+        all_raw_posts = []
+        client = None
+        
         try:
+            # Get client with proper error handling
+            client = await self.session_manager.get_client()
+            
+            if client is None:
+                logger.error("❌ Failed to get Telegram client - session issue")
+                return [], {}
+            
             logger.info(f"🔍 Scanning {len(channels_config)} Telegram channels...")
             
             for channel_config in channels_config:
@@ -725,697 +1482,6 @@ class SocialMediaScanner:
                         'avg_score': 0
                     }
                     
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(2)  # Rate limiting
                     
                 except Exception as e:
-                    logger.error(f"  ❌ Error scanning {channel}: {str(e)}")
-                    continue
-            
-            # ✅ Trending analysis devam eder...
-            logger.info("🧠 Analyzing Telegram content for keywords...")
-            trending_data = self.extract_keywords_from_content(all_raw_posts)
-            
-            # ✅ Scanning devam eder (kalan kod aynı)...
-            
-        finally:
-            # ✅ Safe disconnect:
-            if client:
-                await client.disconnect()
-    
-    except Exception as e:
-        logger.error(f"❌ Fatal error in Telegram scan: {str(e)}")
-        raise
-    
-    return collected_posts, trending_data
-                
-                logger.info("🧠 Analyzing Telegram content for keywords...")
-                trending_data = self.extract_keywords_from_content(all_raw_posts)
-                
-                scan_date = datetime.now().strftime('%Y-%m-%d %H:%M')
-                self.notion.save_keywords_to_notion(trending_data, scan_date, 'telegram')
-                
-                for post_data in all_raw_posts:
-                    content = post_data['content']
-                    channel_config = post_data['channel_config']
-                    
-                    relevance = self.calculate_brand_relevance(content, trending_data, 'telegram')
-                    engagement = post_data['engagement']
-                    
-                    engagement_score = min(10, (engagement['total'] // 100) + (len(relevance['matched_words']) * 0.5))
-                    
-                    priority_bonus = {
-                        'Critical': 3, 'High': 2, 'Medium': 1, 'Low': 0
-                    }.get(channel_config['priority'], 1)
-                    
-                    category_bonus = {
-                        'Sailing': 3, 'Fashion': 2, 'Lifestyle': 2,
-                        'Competitor': 1, 'Influencer': 1, 'News': 0.5, 'Brand': 1
-                    }.get(channel_config['category'], 1)
-                    
-                    north_sails_score = min(10, (
-                        relevance['total_relevance'] + 
-                        engagement_score + 
-                        priority_bonus + 
-                        category_bonus
-                    ) / 4)
-                    
-                    if north_sails_score < min_score or engagement['total'] < 100:
-                        continue
-                    
-                    if any('яхт' in word or 'sail' in word for word in relevance['matched_words']):
-                        category = 'sailing'
-                    elif any('мод' in word or 'fashion' in word for word in relevance['matched_words']):
-                        category = 'fashion'
-                    elif any('премиум' in word or 'luxury' in word for word in relevance['matched_words']):
-                        category = 'luxury'
-                    else:
-                        category = 'lifestyle'
-                    
-                    final_post = {
-                        'platform': 'telegram',
-                        'channel': post_data['channel'],
-                        'channel_title': post_data['entity'].title,
-                        'channel_category': channel_config['category'],
-                        'message_id': post_data['message'].id,
-                        'content': content,
-                        'date': post_data['message'].date.isoformat(),
-                        'engagement': engagement,
-                        'media_type': 'photo' if post_data['message'].photo else 'video' if post_data['message'].video else 'text',
-                        'trending_analysis': {
-                            'matched_words': relevance['matched_words'],
-                            'matched_phrases': relevance['matched_phrases'],
-                            'word_score': relevance['trending_word_score'],
-                            'phrase_score': relevance['trending_phrase_score']
-                        },
-                        'ai_analysis': {
-                            'brand_relevance': round(relevance['total_relevance'], 1),
-                            'trend_score': round(engagement_score, 1),
-                            'viral_potential': min(10, engagement['total'] // 200),
-                            'target_audience_fit': round((relevance['trending_word_score'] + relevance['trending_phrase_score']) / 2, 1),
-                            'content_category': category,
-                            'hashtags': [f'#{category}', '#northsails', '#telegram'],
-                            'insights': f"High {category} potential - discovered via trending analysis",
-                            'keyword_analysis': {
-                                'total_trending_matches': len(relevance['matched_words']) + len(relevance['matched_phrases']),
-                                'brand_mentions': relevance['brand_score'] > 0,
-                                'top_matched_words': relevance['matched_words'][:5],
-                                'top_matched_phrases': relevance['matched_phrases'][:3],
-                                'discovery_method': 'telegram_trending_analysis'
-                            }
-                        },
-                        'north_sails_score': round(north_sails_score, 1),
-                        'processed_at': datetime.now().isoformat(),
-                        'url': f"https://t.me/{post_data['channel'].replace('@', '')}/{post_data['message'].id}",
-                        'scanner_version': 'telegram_notion_v3.0'
-                    }
-                    
-                    collected_posts.append(final_post)
-                
-                for channel_id, stats in channel_stats.items():
-                    channel_posts = [p for p in collected_posts if p.get('channel_config', {}).get('id') == channel_id]
-                    if channel_posts:
-                        avg_score = sum(p['north_sails_score'] for p in channel_posts) / len(channel_posts)
-                        stats['avg_score'] = round(avg_score, 1)
-                    
-                    self.notion.update_telegram_stats(channel_id, stats)
-            
-            finally:
-                await client.disconnect()
-        
-        except Exception as e:
-            logger.error(f"❌ Fatal error in Telegram scan: {str(e)}")
-            raise
-        
-        return collected_posts, trending_data
-
-    def scan_vk_communities_batch(self, min_score=6.0, batch_size=5):
-        """Scan VK communities with batch processing and rate limiting"""
-        communities_config = self.notion.get_vk_communities()
-        
-        if not communities_config:
-            return [], {}
-        
-        collected_posts = []
-        community_stats = {}
-        all_raw_posts = []
-        
-        try:
-            logger.info(f"🔍 Scanning {len(communities_config)} VK communities in batches of {batch_size}...")
-            
-            # Process communities in batches
-            for i in range(0, len(communities_config), batch_size):
-                batch = communities_config[i:i + batch_size]
-                
-                logger.info(f"🔄 Processing batch {i//batch_size + 1}/{(len(communities_config)-1)//batch_size + 1}")
-                
-                for community_config in batch:
-                    community_id = community_config['community_id']
-                    
-                    try:
-                        logger.info(f"📱 Scanning VK: {community_id}")
-                        
-                        community_info = self.vk.get_community_info(community_id)
-                        if not community_info:
-                            continue
-                        
-                        posts = self.vk.get_community_posts(community_id, 50)
-                        
-                        community_posts = []
-                        
-                        for post in posts:
-                            if not post.get('text') or len(post['text']) < 50:
-                                continue
-                            
-                            likes = post.get('likes', {}).get('count', 0)
-                            comments = post.get('comments', {}).get('count', 0)
-                            reposts = post.get('reposts', {}).get('count', 0)
-                            views = post.get('views', {}).get('count', 0)
-                            
-                            total_engagement = likes + (comments * 3) + (reposts * 5) + (views * 0.1)
-                            
-                            post_data = {
-                                'community_id': community_id,
-                                'community_config': community_config,
-                                'community_info': community_info,
-                                'post': post,
-                                'content': post['text'],
-                                'engagement': {
-                                    'likes': likes,
-                                    'comments': comments,
-                                    'reposts': reposts,
-                                    'views': views,
-                                    'total': total_engagement
-                                }
-                            }
-                            
-                            all_raw_posts.append(post_data)
-                            community_posts.append(post_data)
-                        
-                        community_stats[community_config['id']] = {
-                            'total_posts': len(community_posts),
-                            'avg_engagement': 0,
-                            'members_count': community_info.get('members_count', 0)
-                        }
-                        
-                    except Exception as e:
-                        logger.error(f"  ❌ Error scanning VK {community_id}: {str(e)}")
-                        continue
-                
-                # Wait between batches
-                if i + batch_size < len(communities_config):
-                    logger.info("😴 Batch completed, waiting 30s...")
-                    time.sleep(30)
-            
-            logger.info("🧠 Analyzing VK content for keywords...")
-            trending_data = self.extract_keywords_from_content(all_raw_posts)
-            
-            scan_date = datetime.now().strftime('%Y-%m-%d %H:%M')
-            self.notion.save_keywords_to_notion(trending_data, scan_date, 'vk')
-            
-            for post_data in all_raw_posts:
-                content = post_data['content']
-                community_config = post_data['community_config']
-                
-                relevance = self.calculate_brand_relevance(content, trending_data, 'vk')
-                engagement = post_data['engagement']
-                
-                engagement_score = min(10, (engagement['total'] // 50) + (len(relevance['matched_words']) * 0.5))
-                
-                priority_bonus = {
-                    'Critical': 3, 'High': 2, 'Medium': 1, 'Low': 0
-                }.get(community_config['priority'], 1)
-                
-                category_bonus = {
-                    'Sailing': 3, 'Fashion': 2, 'Lifestyle': 2,
-                    'Competitor': 1, 'Influencer': 1, 'Brand': 1, 'Community': 0.5
-                }.get(community_config['category'], 1)
-                
-                north_sails_score = min(10, (
-                    relevance['total_relevance'] + 
-                    engagement_score + 
-                    priority_bonus + 
-                    category_bonus
-                ) / 4)
-                
-                if north_sails_score < min_score or engagement['total'] < 50:
-                    continue
-                
-                if any('яхт' in word or 'sail' in word for word in relevance['matched_words']):
-                    category = 'sailing'
-                elif any('мод' in word or 'fashion' in word for word in relevance['matched_words']):
-                    category = 'fashion'
-                elif any('премиум' in word or 'luxury' in word for word in relevance['matched_words']):
-                    category = 'luxury'
-                else:
-                    category = 'lifestyle'
-                
-                final_post = {
-                    'platform': 'vk',
-                    'community_id': post_data['community_id'],
-                    'community_name': post_data['community_info'].get('name', ''),
-                    'community_category': community_config['category'],
-                    'post_id': post_data['post']['id'],
-                    'content': content,
-                    'date': datetime.fromtimestamp(post_data['post']['date']).isoformat(),
-                    'engagement': engagement,
-                    'media_type': 'photo' if post_data['post'].get('attachments') else 'text',
-                    'trending_analysis': {
-                        'matched_words': relevance['matched_words'],
-                        'matched_phrases': relevance['matched_phrases'],
-                        'word_score': relevance['trending_word_score'],
-                        'phrase_score': relevance['trending_phrase_score']
-                    },
-                    'ai_analysis': {
-                        'brand_relevance': round(relevance['total_relevance'], 1),
-                        'trend_score': round(engagement_score, 1),
-                        'viral_potential': min(10, engagement['total'] // 100),
-                        'target_audience_fit': round((relevance['trending_word_score'] + relevance['trending_phrase_score']) / 2, 1),
-                        'content_category': category,
-                        'hashtags': [f'#{category}', '#northsails', '#vk'],
-                        'insights': f"High {category} potential - VK community analysis",
-                        'keyword_analysis': {
-                            'total_trending_matches': len(relevance['matched_words']) + len(relevance['matched_phrases']),
-                            'brand_mentions': relevance['brand_score'] > 0,
-                            'top_matched_words': relevance['matched_words'][:5],
-                            'top_matched_phrases': relevance['matched_phrases'][:3],
-                            'discovery_method': 'vk_trending_analysis'
-                        }
-                    },
-                    'north_sails_score': round(north_sails_score, 1),
-                    'processed_at': datetime.now().isoformat(),
-                    'url': f"https://vk.com/wall-{post_data['community_id']}_{post_data['post']['id']}",
-                    'scanner_version': 'vk_notion_v3.0'
-                }
-                
-                collected_posts.append(final_post)
-            
-            for community_id, stats in community_stats.items():
-                community_posts = [p for p in collected_posts if p.get('community_config', {}).get('id') == community_id]
-                if community_posts:
-                    avg_engagement = sum(p['engagement']['total'] for p in community_posts) / len(community_posts)
-                    stats['avg_engagement'] = round(avg_engagement, 1)
-                
-                self.notion.update_vk_stats(community_id, stats)
-        
-        except Exception as e:
-            logger.error(f"❌ Fatal error in VK scan: {str(e)}")
-            raise
-        
-        return collected_posts, trending_data
-
-# Initialize scanner
-scanner = SocialMediaScanner()
-
-@app.route('/')
-def home():
-    """Health check endpoint"""
-    return jsonify({
-        "status": "active",
-        "service": "North Sails Social Media Intelligence API",
-        "version": "3.0 - Production Ready with Session Management + Rate Limiting + Backup",
-        "features": [
-            "Telegram channel monitoring with session persistence",
-            "VK community monitoring with rate limiting", 
-            "Automatic keyword discovery",
-            "Notion database integration",
-            "Multi-layer backup system",
-            "100+ frequency trending analysis",
-            "Error recovery mechanisms"
-        ],
-        "integrations": {
-            "notion_configured": bool(NOTION_TOKEN),
-            "telegram_configured": bool(API_ID and API_HASH),
-            "telegram_session": bool(TELEGRAM_SESSION_STRING),
-            "vk_configured": bool(VK_ACCESS_TOKEN),
-            "backup_configured": bool(BACKUP_TELEGRAM_CHAT_ID)
-        },
-        "timestamp": datetime.now().isoformat()
-    })
-
-@app.route('/scan/telegram', methods=['POST', 'GET'])
-def scan_telegram():
-    """Telegram channels scanning endpoint"""
-    try:
-        hours_back = request.json.get('hours_back', 24) if request.is_json else 24
-        min_score = request.json.get('min_score', 6.0) if request.is_json else 6.0
-        
-        logger.info(f"🚀 Starting Telegram scan: {hours_back}h back, min_score: {min_score}")
-        
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        posts, trending_data = loop.run_until_complete(scanner.scan_telegram_channels(hours_back, min_score))
-        loop.close()
-        
-        result = {
-            'source': 'telegram_scanner_api_v3',
-            'timestamp': datetime.now().isoformat(),
-            'parameters': {
-                'hours_back': hours_back,
-                'min_score': min_score
-            },
-            'total_posts': len(posts),
-            'posts': posts,
-            'trending_keywords': {
-                'words': trending_data['words'][:10],
-                'phrases': trending_data['phrases'][:10]
-            },
-            'summary': {
-                'total_collected': len(posts),
-                'avg_north_sails_score': sum(p['north_sails_score'] for p in posts) / len(posts) if posts else 0,
-                'top_category': max(set(p['ai_analysis']['content_category'] for p in posts), 
-                                  key=lambda x: sum(1 for p in posts if p['ai_analysis']['content_category'] == x)) if posts else 'none',
-                'high_score_posts': len([p for p in posts if p['north_sails_score'] >= 8]),
-                'categories': {}
-            }
-        }
-        
-        if posts:
-            categories = {}
-            for post in posts:
-                cat = post['ai_analysis']['content_category']
-                categories[cat] = categories.get(cat, 0) + 1
-            result['summary']['categories'] = categories
-        
-        logger.info(f"✅ Telegram scan completed: {len(posts)} posts collected")
-        return jsonify(result)
-        
-    except Exception as e:
-        logger.error(f"❌ Error in Telegram scan: {str(e)}")
-        return jsonify({
-            'error': str(e),
-            'source': 'telegram_scanner_api_v3',
-            'timestamp': datetime.now().isoformat(),
-            'posts': []
-        }), 500
-
-@app.route('/scan/vk', methods=['POST', 'GET'])
-def scan_vk():
-    """VK communities scanning endpoint"""
-    try:
-        min_score = request.json.get('min_score', 6.0) if request.is_json else 6.0
-        batch_size = request.json.get('batch_size', 5) if request.is_json else 5
-        
-        logger.info(f"🚀 Starting VK scan: min_score: {min_score}, batch_size: {batch_size}")
-        
-        posts, trending_data = scanner.scan_vk_communities_batch(min_score, batch_size)
-        
-        result = {
-            'source': 'vk_scanner_api_v3',
-            'timestamp': datetime.now().isoformat(),
-            'parameters': {
-                'min_score': min_score,
-                'batch_size': batch_size
-            },
-            'total_posts': len(posts),
-            'posts': posts,
-            'trending_keywords': {
-                'words': trending_data['words'][:10],
-                'phrases': trending_data['phrases'][:10]
-            },
-            'summary': {
-                'total_collected': len(posts),
-                'avg_north_sails_score': sum(p['north_sails_score'] for p in posts) / len(posts) if posts else 0,
-                'top_category': max(set(p['ai_analysis']['content_category'] for p in posts), 
-                                  key=lambda x: sum(1 for p in posts if p['ai_analysis']['content_category'] == x)) if posts else 'none',
-                'high_score_posts': len([p for p in posts if p['north_sails_score'] >= 8]),
-                'categories': {}
-            }
-        }
-        
-        if posts:
-            categories = {}
-            for post in posts:
-                cat = post['ai_analysis']['content_category']
-                categories[cat] = categories.get(cat, 0) + 1
-            result['summary']['categories'] = categories
-        
-        logger.info(f"✅ VK scan completed: {len(posts)} posts collected")
-        return jsonify(result)
-        
-    except Exception as e:
-        logger.error(f"❌ Error in VK scan: {str(e)}")
-        return jsonify({
-            'error': str(e),
-            'source': 'vk_scanner_api_v3',
-            'timestamp': datetime.now().isoformat(),
-            'posts': []
-        }), 500
-
-@app.route('/scan/all', methods=['POST', 'GET'])
-def scan_all_platforms():
-    """Scan all platforms endpoint"""
-    try:
-        hours_back = request.json.get('hours_back', 24) if request.is_json else 24
-        min_score = request.json.get('min_score', 6.0) if request.is_json else 6.0
-        batch_size = request.json.get('batch_size', 5) if request.is_json else 5
-        
-        logger.info(f"🚀 Starting full scan: Telegram + VK")
-        
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        telegram_posts, telegram_trending = loop.run_until_complete(scanner.scan_telegram_channels(hours_back, min_score))
-        loop.close()
-        
-        vk_posts, vk_trending = scanner.scan_vk_communities_batch(min_score, batch_size)
-        
-        all_posts = telegram_posts + vk_posts
-        
-        result = {
-            'source': 'full_scanner_api_v3',
-            'timestamp': datetime.now().isoformat(),
-            'parameters': {
-                'hours_back': hours_back,
-                'min_score': min_score,
-                'batch_size': batch_size
-            },
-            'platforms': {
-                'telegram': {
-                    'posts_count': len(telegram_posts),
-                    'trending_keywords': {
-                        'words': telegram_trending['words'][:5],
-                        'phrases': telegram_trending['phrases'][:5]
-                    }
-                },
-                'vk': {
-                    'posts_count': len(vk_posts),
-                    'trending_keywords': {
-                        'words': vk_trending['words'][:5],
-                        'phrases': vk_trending['phrases'][:5]
-                    }
-                }
-            },
-            'total_posts': len(all_posts),
-            'posts': all_posts,
-            'summary': {
-                'total_collected': len(all_posts),
-                'avg_north_sails_score': sum(p['north_sails_score'] for p in all_posts) / len(all_posts) if all_posts else 0,
-                'top_category': max(set(p['ai_analysis']['content_category'] for p in all_posts), 
-                                  key=lambda x: sum(1 for p in all_posts if p['ai_analysis']['content_category'] == x)) if all_posts else 'none',
-                'high_score_posts': len([p for p in all_posts if p['north_sails_score'] >= 8]),
-                'platform_breakdown': {
-                    'telegram': len(telegram_posts),
-                    'vk': len(vk_posts)
-                }
-            }
-        }
-        
-        logger.info(f"✅ Full scan completed: {len(all_posts)} total posts collected")
-        return jsonify(result)
-        
-    except Exception as e:
-        logger.error(f"❌ Error in full scan: {str(e)}")
-        return jsonify({
-            'error': str(e),
-            'source': 'full_scanner_api_v3',
-            'timestamp': datetime.now().isoformat(),
-            'posts': []
-        }), 500
-
-@app.route('/webhook/n8n', methods=['POST'])
-def n8n_webhook():
-    """N8N webhook integration endpoint"""
-    try:
-        data = request.json
-        scan_type = data.get('scan_type', 'all')
-        
-        if scan_type == 'telegram':
-            return redirect(url_for('scan_telegram'), code=307)
-        elif scan_type == 'vk':
-            return redirect(url_for('scan_vk'), code=307)
-        else:
-            return redirect(url_for('scan_all_platforms'), code=307)
-            
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/channels/telegram')
-def list_telegram_channels():
-    """List Telegram channels from Notion"""
-    try:
-        channels = scanner.notion.get_telegram_channels()
-        return jsonify({
-            'platform': 'telegram',
-            'total_channels': len(channels),
-            'channels': channels,
-            'timestamp': datetime.now().isoformat()
-        })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/channels/vk')
-def list_vk_communities():
-    """List VK communities from Notion"""
-    try:
-        communities = scanner.notion.get_vk_communities()
-        return jsonify({
-            'platform': 'vk',
-            'total_communities': len(communities),
-            'communities': communities,
-            'timestamp': datetime.now().isoformat()
-        })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/backup/export')
-def export_backup():
-    """Export last 24 hours data as JSON backup"""
-    try:
-        backup_data = {
-            'timestamp': datetime.now().isoformat(),
-            'telegram_channels': scanner.notion.get_telegram_channels(),
-            'vk_communities': scanner.notion.get_vk_communities(),
-            'backup_files': len(glob.glob('/tmp/northsails_backup_*.json')),
-            'version': '3.0'
-        }
-        
-        return jsonify(backup_data)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/recovery/list_backups')
-def list_backups():
-    """List available backup files"""
-    try:
-        backup_files = glob.glob('/tmp/northsails_backup_*.json')
-        
-        backups = []
-        for file_path in backup_files:
-            try:
-                with open(file_path, 'r') as f:
-                    backup_data = json.load(f)
-                    backups.append({
-                        'backup_id': backup_data['backup_id'],
-                        'timestamp': backup_data['timestamp'],
-                        'total_posts': backup_data['total_posts'],
-                        'scan_type': backup_data['scan_type'],
-                        'file_path': file_path
-                    })
-            except:
-                continue
-        
-        return jsonify({
-            'available_backups': backups,
-            'total_backup_files': len(backups),
-            'timestamp': datetime.now().isoformat()
-        })
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/recovery/restore/<backup_id>')
-def restore_backup(backup_id):
-    """Restore data from backup"""
-    try:
-        file_path = f'/tmp/northsails_backup_{backup_id}.json'
-        
-        with open(file_path, 'r') as f:
-            backup_data = json.load(f)
-        
-        return jsonify({
-            'backup_id': backup_id,
-            'total_posts_in_backup': len(backup_data['posts']),
-            'backup_timestamp': backup_data['timestamp'],
-            'scan_type': backup_data['scan_type'],
-            'status': 'backup_retrieved',
-            'message': 'Backup data retrieved. Manual processing may be needed for Notion restoration.'
-        })
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/health')
-def health():
-    """Detailed health check"""
-    session_status = "configured" if TELEGRAM_SESSION_STRING else "missing"
-    
-    return jsonify({
-        "status": "healthy",
-        "uptime": "active",
-        "version": "3.0",
-        "integrations": {
-            "notion": {
-                "configured": bool(NOTION_TOKEN),
-                "telegram_db": bool(TELEGRAM_DATABASE_ID),
-                "vk_db": bool(VK_DATABASE_ID),
-                "keywords_db": bool(KEYWORDS_DATABASE_ID)
-            },
-            "telegram": {
-                "configured": bool(API_ID and API_HASH),
-                "session_status": session_status
-            },
-            "vk": {
-                "configured": bool(VK_ACCESS_TOKEN),
-                "rate_limiting": "enabled"
-            },
-            "backup": {
-                "configured": bool(BACKUP_TELEGRAM_CHAT_ID),
-                "local_backup": "enabled",
-                "available_backups": len(glob.glob('/tmp/northsails_backup_*.json'))
-            }
-        },
-        "features": {
-            "session_management": True,
-            "rate_limiting": True,
-            "backup_system": True,
-            "keyword_discovery": True,
-            "trending_analysis": True,
-            "multi_platform": True,
-            "notion_integration": True,
-            "error_recovery": True
-        },
-        "timestamp": datetime.now().isoformat()
-    })
-
-@app.route('/session/generate')
-def generate_session():
-    """Helper endpoint to generate Telegram session string"""
-    if TELEGRAM_SESSION_STRING:
-        return jsonify({
-            'status': 'already_configured',
-            'message': 'Session string already exists',
-            'session_configured': True
-        })
-    
-    return jsonify({
-        'status': 'needs_configuration',
-        'message': 'Run the app locally first to generate session string',
-        'instructions': [
-            '1. Set TELEGRAM_API_ID and TELEGRAM_API_HASH',
-            '2. Leave TELEGRAM_SESSION_STRING empty',
-            '3. Run /scan/telegram endpoint',
-            '4. Check logs for session string',
-            '5. Add session string to Render environment'
-        ]
-    })
-
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    
-    logger.info("🚀 North Sails Social Media Intelligence API v3.0 Starting...")
-    logger.info(f"🔧 Notion: {'✅' if NOTION_TOKEN else '❌'}")
-    logger.info(f"📱 Telegram: {'✅' if API_ID and API_HASH else '❌'}")
-    logger.info(f"🔑 Session: {'✅' if TELEGRAM_SESSION_STRING else '❌ (Generate needed)'}")
-    logger.info(f"📘 VK: {'✅' if VK_ACCESS_TOKEN else '❌'}")
-    logger.info(f"💾 Backup: {'✅' if BACKUP_TELEGRAM_CHAT_ID else '⚠️ (Optional)'}")
-    
-    app.run(host='0.0.0.0', port=port, debug=False)
